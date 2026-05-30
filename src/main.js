@@ -12,6 +12,16 @@ let selectedMarker = null;
 const detailsPanel = () => document.getElementById("details-panel");
 const detailsContent = () => document.getElementById("details-content");
 const detailsTitle = () => document.getElementById("details-title");
+const detailsBackdrop = () => document.getElementById("details-backdrop");
+
+function isMobile() {
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+
+function getMarkerRadius(selected = false) {
+  const base = isMobile() ? 8 : 6;
+  return selected ? base + 3 : base;
+}
 
 function initMap() {
   map = L.map("map", {
@@ -65,12 +75,17 @@ function initMap() {
 
 function closeDetails() {
   const panel = detailsPanel();
+  const backdrop = detailsBackdrop();
   if (panel) {
     panel.classList.remove("is-open");
     panel.setAttribute("aria-hidden", "true");
   }
+  if (backdrop) {
+    backdrop.classList.remove("is-visible");
+    backdrop.setAttribute("aria-hidden", "true");
+  }
   if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 1, radius: 6 });
+    selectedMarker.setStyle({ weight: 1, radius: getMarkerRadius() });
     selectedMarker = null;
   }
 }
@@ -82,12 +97,12 @@ function openDetails(municipio, color) {
   if (!panel || !content) return;
 
   if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 1, radius: 6 });
+    selectedMarker.setStyle({ weight: 1, radius: getMarkerRadius() });
   }
 
   selectedMarker = municipio._marker;
   if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 3, radius: 9 });
+    selectedMarker.setStyle({ weight: 3, radius: getMarkerRadius(true) });
     selectedMarker.bringToFront();
   }
 
@@ -126,10 +141,17 @@ function openDetails(municipio, color) {
 
   panel.classList.add("is-open");
   panel.setAttribute("aria-hidden", "false");
+
+  const backdrop = detailsBackdrop();
+  if (backdrop) {
+    backdrop.classList.add("is-visible");
+    backdrop.setAttribute("aria-hidden", "false");
+  }
 }
 
 function setupDetailsPanel() {
   document.getElementById("details-close")?.addEventListener("click", closeDetails);
+  detailsBackdrop()?.addEventListener("click", closeDetails);
   map.on("click", () => closeDetails());
 }
 
@@ -196,7 +218,7 @@ function renderMapData(mapData) {
     bounds.push(latlng);
 
     const marker = L.circleMarker(latlng, {
-      radius: 6,
+      radius: getMarkerRadius(),
       fillColor: color,
       color: "#2c3e50",
       weight: 1,
