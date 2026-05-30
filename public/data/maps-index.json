@@ -1,0 +1,11 @@
+{
+  "mapas": [
+    {
+      "id": "2008",
+      "titulo": "Tabela 2008 — EES por município",
+      "ano": 2008,
+      "arquivo": "2008-geocoded.json",
+      "descricao": "Distribuição dos EES por municípios no Brasil"
+    }
+  ]
+}

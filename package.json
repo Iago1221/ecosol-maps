@@ -1,0 +1,21 @@
+{
+  "name": "ecosol-maps",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "data:convert": "python3 scripts/convert-xls-to-json.py",
+    "data:geocode": "python3 scripts/geocode-municipios.py",
+    "data:sync": "python3 scripts/sync-public-data.py",
+    "data:build": "npm run data:convert && npm run data:geocode && npm run data:sync"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
