@@ -3,25 +3,24 @@ import "./style.css";
 
 const BRAZIL_CENTER = [-14.235, -51.9253];
 const BRAZIL_ZOOM = 4;
+const BORDER_COLOR = "#94a3b8";
+const DEFAULT_COLOR = "#1a5276";
 
 let map = null;
-let markersLayer = null;
+let choroplethLayer = null;
 let currentMapData = null;
-let selectedMarker = null;
+let selectedLayer = null;
+let openMunicipio = null;
+let municipiosGeo = null;
+let municipioByIbge = new Map();
+let currentMin = 0;
+let currentMax = 0;
+let selectedBaseColor = DEFAULT_COLOR;
 
 const detailsPanel = () => document.getElementById("details-panel");
 const detailsContent = () => document.getElementById("details-content");
 const detailsTitle = () => document.getElementById("details-title");
 const detailsBackdrop = () => document.getElementById("details-backdrop");
-
-function isMobile() {
-  return window.matchMedia("(max-width: 768px)").matches;
-}
-
-function getMarkerRadius(selected = false) {
-  const base = isMobile() ? 8 : 6;
-  return selected ? base + 3 : base;
-}
 
 function initMap() {
   map = L.map("map", {
@@ -67,10 +66,21 @@ function initMap() {
     )
     .addTo(map);
 
-  markersLayer = L.layerGroup().addTo(map);
+  choroplethLayer = L.geoJSON(null, {
+    style: () => defaultPolygonStyle(),
+  }).addTo(map);
 
   window.addEventListener("resize", () => map.invalidateSize());
   setupDetailsPanel();
+}
+
+function defaultPolygonStyle(selected = false) {
+  return {
+    weight: selected ? 2.5 : 0.6,
+    color: selected ? selectedBaseColor : BORDER_COLOR,
+    opacity: selected ? 1 : 0.85,
+    fillOpacity: 0.78,
+  };
 }
 
 function closeDetails() {
@@ -84,10 +94,12 @@ function closeDetails() {
     backdrop.classList.remove("is-visible");
     backdrop.setAttribute("aria-hidden", "true");
   }
-  if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 1, radius: getMarkerRadius() });
-    selectedMarker = null;
+  if (selectedLayer) {
+    const style = selectedLayer._baseStyle ?? defaultPolygonStyle();
+    selectedLayer.setStyle(style);
+    selectedLayer = null;
   }
+  openMunicipio = null;
 }
 
 function openDetails(municipio, color) {
@@ -96,14 +108,19 @@ function openDetails(municipio, color) {
   const title = detailsTitle();
   if (!panel || !content) return;
 
-  if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 1, radius: getMarkerRadius() });
+  if (selectedLayer) {
+    const prevStyle = selectedLayer._baseStyle ?? defaultPolygonStyle();
+    selectedLayer.setStyle(prevStyle);
   }
 
-  selectedMarker = municipio._marker;
-  if (selectedMarker) {
-    selectedMarker.setStyle({ weight: 3, radius: getMarkerRadius(true) });
-    selectedMarker.bringToFront();
+  selectedLayer = municipio._layer;
+  openMunicipio = municipio;
+  if (selectedLayer) {
+    selectedLayer.setStyle({
+      ...defaultPolygonStyle(true),
+      fillColor: color,
+    });
+    selectedLayer.bringToFront();
   }
 
   title.textContent = `${municipio.nome} — ${municipio.uf}`;
@@ -155,16 +172,74 @@ function setupDetailsPanel() {
   map.on("click", () => closeDetails());
 }
 
-function getColorScale(min, max) {
-  return (value) => {
-    if (max === min) return "#1a5276";
-    const t = (value - min) / (max - min);
-    // Escala de azul claro → azul escuro
-    const r = Math.round(198 - t * 160);
-    const g = Math.round(226 - t * 170);
-    const b = Math.round(247 - t * 80);
-    return `rgb(${r}, ${g}, ${b})`;
+function hexToRgb(hex) {
+  const normalized = hex.replace("#", "");
+  if (normalized.length !== 6) return { r: 26, g: 82, b: 118 };
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
   };
+}
+
+function getColorScale(min, max, baseHex = DEFAULT_COLOR) {
+  const { r, g, b } = hexToRgb(baseHex);
+  const lightMix = 0.78;
+
+  return (value) => {
+    if (max === min) return baseHex;
+    const t = (value - min) / (max - min);
+    const factor = lightMix * (1 - t);
+    const rr = Math.round(r + (255 - r) * factor);
+    const gg = Math.round(g + (255 - g) * factor);
+    const bb = Math.round(b + (255 - b) * factor);
+    return `rgb(${rr}, ${gg}, ${bb})`;
+  };
+}
+
+function getCurrentColor(value) {
+  return getColorScale(currentMin, currentMax, selectedBaseColor)(value);
+}
+
+function updateDetailsSwatch(color) {
+  const swatch = detailsContent()?.querySelector(".details-swatch");
+  if (swatch) swatch.style.background = color;
+}
+
+function refreshMapColors() {
+  if (!currentMapData) return;
+
+  const getColor = (value) => getCurrentColor(value);
+
+  choroplethLayer.eachLayer((layer) => {
+    const ibge = layer.feature.properties.codigo_ibge;
+    const municipio = municipioByIbge.get(ibge);
+    if (!municipio) return;
+
+    const color = getColor(municipio.valor);
+    const style = {
+      ...defaultPolygonStyle(false),
+      fillColor: color,
+    };
+
+    layer._baseStyle = style;
+    layer.setStyle(
+      layer === selectedLayer
+        ? { ...defaultPolygonStyle(true), fillColor: color }
+        : style
+    );
+  });
+
+  if (selectedLayer && openMunicipio) {
+    const color = getColor(openMunicipio.valor);
+    selectedLayer.setStyle({
+      ...defaultPolygonStyle(true),
+      fillColor: color,
+    });
+    updateDetailsSwatch(color);
+  }
+
+  renderLegend(currentMin, currentMax, getColor);
 }
 
 function renderLegend(min, max, getColor) {
@@ -198,56 +273,87 @@ function renderInfo(mapData) {
   `;
 }
 
+async function loadMunicipiosGeo() {
+  if (municipiosGeo) return municipiosGeo;
+
+  const res = await fetch(`${import.meta.env.BASE_URL}data/geo/municipios-br.geojson`);
+  if (!res.ok) {
+    throw new Error("Não foi possível carregar as fronteiras municipais");
+  }
+
+  municipiosGeo = await res.json();
+  return municipiosGeo;
+}
+
 function renderMapData(mapData) {
   currentMapData = mapData;
   closeDetails();
-  markersLayer.clearLayers();
+  choroplethLayer.clearLayers();
+
+  municipioByIbge = new Map(
+    mapData.municipios
+      .filter((m) => m.codigo_ibge != null)
+      .map((m) => [m.codigo_ibge, m])
+  );
 
   const valores = mapData.municipios.map((m) => m.valor);
-  const min = Math.min(...valores);
-  const max = Math.max(...valores);
-  const getColor = getColorScale(min, max);
+  currentMin = Math.min(...valores);
+  currentMax = Math.max(...valores);
+  const getColor = (value) => getCurrentColor(value);
 
-  const bounds = [];
+  const features = municipiosGeo.features.filter((feature) =>
+    municipioByIbge.has(feature.properties.codigo_ibge)
+  );
 
-  for (const m of mapData.municipios) {
-    if (m.latitude == null || m.longitude == null) continue;
+  const geoData = { type: "FeatureCollection", features };
 
-    const color = getColor(m.valor);
-    const latlng = [m.latitude, m.longitude];
-    bounds.push(latlng);
+  choroplethLayer.addData(geoData);
 
-    const marker = L.circleMarker(latlng, {
-      radius: getMarkerRadius(),
+  choroplethLayer.eachLayer((layer) => {
+    const ibge = layer.feature.properties.codigo_ibge;
+    const municipio = municipioByIbge.get(ibge);
+    if (!municipio) return;
+
+    const color = getColor(municipio.valor);
+    const style = {
+      ...defaultPolygonStyle(),
       fillColor: color,
-      color: "#2c3e50",
-      weight: 1,
-      opacity: 0.85,
-      fillOpacity: 0.75,
-    });
+    };
 
-    marker.bindTooltip(
-      `<strong>${m.nome} - ${m.uf}</strong><br/>EES: ${m.valor}`,
-      { direction: "top", offset: [0, -4] }
+    layer.setStyle(style);
+    layer._baseStyle = style;
+    municipio._layer = layer;
+
+    layer.bindTooltip(
+      `<strong>${municipio.nome} - ${municipio.uf}</strong><br/>EES: ${municipio.valor}`,
+      { sticky: true, opacity: 0.95 }
     );
 
-    m._marker = marker;
-    marker.on("click", (e) => {
+    layer.on("click", (e) => {
       L.DomEvent.stopPropagation(e);
-      openDetails(m, color);
+      openDetails(municipio, getCurrentColor(municipio.valor));
     });
+  });
 
-    marker.addTo(markersLayer);
-  }
-
-  if (bounds.length > 0) {
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
+  if (features.length > 0) {
+    map.fitBounds(choroplethLayer.getBounds(), { padding: [40, 40], maxZoom: 6 });
   } else {
     map.setView(BRAZIL_CENTER, BRAZIL_ZOOM);
   }
 
-  renderLegend(min, max, getColor);
+  renderLegend(currentMin, currentMax, getColor);
   renderInfo(mapData);
+}
+
+function setupColorSelect() {
+  const input = document.getElementById("color-select");
+  if (!input) return;
+
+  input.value = selectedBaseColor;
+  input.addEventListener("input", () => {
+    selectedBaseColor = input.value;
+    refreshMapColors();
+  });
 }
 
 async function loadMapIndex() {
@@ -288,8 +394,10 @@ async function setupMapSelect(mapas) {
 
 async function main() {
   initMap();
+  setupColorSelect();
 
   try {
+    await loadMunicipiosGeo();
     const index = await loadMapIndex();
     await setupMapSelect(index.mapas);
   } catch (err) {
