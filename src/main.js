@@ -6,6 +6,15 @@ const BRAZIL_ZOOM = 4;
 const BORDER_COLOR = "#94a3b8";
 const DEFAULT_COLOR = "#1a5276";
 
+const VALUE_BUCKETS = [
+  { min: 0, label: "0 – 10" },
+  { min: 10, label: "10 – 20" },
+  { min: 20, label: "20 – 30" },
+  { min: 30, label: "30 – 40" },
+  { min: 40, label: "40 – 50" },
+  { min: 50, label: "50+" },
+];
+
 let map = null;
 let choroplethLayer = null;
 let currentMapData = null;
@@ -13,8 +22,6 @@ let selectedLayer = null;
 let openMunicipio = null;
 let municipiosGeo = null;
 let municipioByIbge = new Map();
-let currentMin = 0;
-let currentMax = 0;
 let selectedBaseColor = DEFAULT_COLOR;
 
 const detailsPanel = () => document.getElementById("details-panel");
@@ -192,23 +199,27 @@ function hexToRgb(hex) {
   };
 }
 
-function getColorScale(min, max, baseHex = DEFAULT_COLOR) {
-  const { r, g, b } = hexToRgb(baseHex);
-  const lightMix = 0.78;
+function getBucketIndex(value) {
+  for (let i = VALUE_BUCKETS.length - 1; i >= 0; i--) {
+    if (value >= VALUE_BUCKETS[i].min) return i;
+  }
+  return 0;
+}
 
-  return (value) => {
-    if (max === min) return baseHex;
-    const t = (value - min) / (max - min);
-    const factor = lightMix * (1 - t);
-    const rr = Math.round(r + (255 - r) * factor);
-    const gg = Math.round(g + (255 - g) * factor);
-    const bb = Math.round(b + (255 - b) * factor);
-    return `rgb(${rr}, ${gg}, ${bb})`;
-  };
+function getBucketColor(bucketIndex, baseHex = selectedBaseColor) {
+  const { r, g, b } = hexToRgb(baseHex);
+  const t = bucketIndex / (VALUE_BUCKETS.length - 1);
+  const lightMix = 0.78;
+  const factor = lightMix * (1 - t);
+  const darkenAmount = Math.pow(t, 2.2) * 0.42;
+  const rr = Math.round((r + (255 - r) * factor) * (1 - darkenAmount));
+  const gg = Math.round((g + (255 - g) * factor) * (1 - darkenAmount));
+  const bb = Math.round((b + (255 - b) * factor) * (1 - darkenAmount));
+  return `rgb(${rr}, ${gg}, ${bb})`;
 }
 
 function getCurrentColor(value) {
-  return getColorScale(currentMin, currentMax, selectedBaseColor)(value);
+  return getBucketColor(getBucketIndex(value));
 }
 
 function updateDetailsSwatch(color) {
@@ -219,14 +230,12 @@ function updateDetailsSwatch(color) {
 function refreshMapColors() {
   if (!currentMapData) return;
 
-  const getColor = (value) => getCurrentColor(value);
-
   choroplethLayer.eachLayer((layer) => {
     const ibge = layer.feature.properties.codigo_ibge;
     const municipio = municipioByIbge.get(ibge);
     if (!municipio) return;
 
-    const color = getColor(municipio.valor);
+    const color = getCurrentColor(municipio.valor);
     const style = {
       ...defaultPolygonStyle(false),
       fillColor: color,
@@ -241,7 +250,7 @@ function refreshMapColors() {
   });
 
   if (selectedLayer && openMunicipio) {
-    const color = getColor(openMunicipio.valor);
+    const color = getCurrentColor(openMunicipio.valor);
     selectedLayer.setStyle({
       ...defaultPolygonStyle(true),
       fillColor: color,
@@ -249,29 +258,22 @@ function refreshMapColors() {
     updateDetailsSwatch(color);
   }
 
-  renderLegend(currentMin, currentMax, getColor);
+  renderLegend();
 }
 
-function renderLegend(min, max, getColor) {
+function renderLegend() {
   const legend = document.getElementById("legend");
-  const steps = 5;
-  const items = [];
-
-  for (let i = 0; i <= steps; i++) {
-    const value = min + ((max - min) * i) / steps;
-    const label = i === 0 ? min : i === steps ? max : Math.round(value);
-    items.push(`
+  const items = VALUE_BUCKETS.map((bucket, index) => `
       <div class="legend-item">
-        <span class="legend-color" style="background:${getColor(value)}"></span>
-        <span>${label}</span>
+        <span class="legend-color" style="background:${getBucketColor(index)}"></span>
+        <span>${bucket.label}</span>
       </div>
     `);
-  }
 
   legend.innerHTML = `
     <h3>Quantidade de EES</h3>
     <div class="legend-scale">${items.join("")}</div>
-    <p class="legend-note">Cor mais escura = valor maior</p>
+    <p class="legend-note">Cor mais escura = faixa maior</p>
   `;
 }
 
@@ -306,11 +308,6 @@ function renderMapData(mapData) {
       .map((m) => [m.codigo_ibge, m])
   );
 
-  const valores = mapData.municipios.map((m) => m.valor);
-  currentMin = Math.min(...valores);
-  currentMax = Math.max(...valores);
-  const getColor = (value) => getCurrentColor(value);
-
   const features = municipiosGeo.features.filter((feature) =>
     municipioByIbge.has(feature.properties.codigo_ibge)
   );
@@ -324,7 +321,7 @@ function renderMapData(mapData) {
     const municipio = municipioByIbge.get(ibge);
     if (!municipio) return;
 
-    const color = getColor(municipio.valor);
+    const color = getCurrentColor(municipio.valor);
     const style = {
       ...defaultPolygonStyle(),
       fillColor: color,
@@ -351,7 +348,7 @@ function renderMapData(mapData) {
     map.setView(BRAZIL_CENTER, BRAZIL_ZOOM);
   }
 
-  renderLegend(currentMin, currentMax, getColor);
+  renderLegend();
   renderInfo(mapData);
 }
 
